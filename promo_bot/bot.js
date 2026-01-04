@@ -1,4 +1,4 @@
-const { Telegraf, Markup } = require("telegraf")
+const { Telegraf, Markup, session } = require("telegraf")
 const fs = require("fs-extra")
 const config = require("./config")
 
@@ -6,6 +6,7 @@ const PORT = process.env.PORT || 3000
 const URL = process.env.RENDER_EXTERNAL_URL
 
 const bot = new Telegraf(config.BOT_TOKEN)
+bot.use(session())
 
 // Load or init DB
 let db = fs.existsSync("./db.json") ? fs.readJsonSync("./db.json") : { channels: [], media: {}, users: [] }
@@ -45,7 +46,6 @@ function joinButtons() {
 bot.start(async ctx => {
   const payload = ctx.startPayload
 
-  // Invalid payload detection
   if (payload && !payload.startsWith("media_")) {
     return ctx.reply("❌ Please provide a valid link")
   }
@@ -90,28 +90,50 @@ bot.action("retry", async ctx => {
   }
 })
 
+// ---------------------
 // ADD CHANNEL
 bot.command("add", async ctx => {
   if (!isAdmin(ctx.from.id)) return
-  const msg = await ctx.reply("Send channel link (must start with https://t.me/)", { reply_markup: { force_reply: true } })
+  ctx.session.add_channel = true
+  ctx.reply("Send channel link (must start with https://t.me/)", { reply_markup: { force_reply: true } })
+})
 
-  const filter = (ctx2) => ctx2.message?.reply_to_message?.message_id === msg.message_id && ctx2.from.id === ctx.from.id
-
-  const listener = async function handler(ctx2) {
-    if (!filter(ctx2)) return
-    bot.off("message", handler)  // remove listener after first reply
-
-    const text = ctx2.message.text.trim()
-    if (!text.startsWith("https://t.me/")) {
-      return ctx2.reply("❌ Please provide a valid Telegram channel link")
-    }
-
+bot.on("message", async ctx => {
+  // ADD CHANNEL reply
+  if (ctx.session.add_channel && ctx.message.reply_to_message) {
+    const text = ctx.message.text
+    if (!text.startsWith("https://t.me/")) return ctx.reply("❌ Please provide a valid Telegram channel link")
     db.channels.push(text)
     saveDB()
-    await ctx2.reply("✅ Channel Added")
+    ctx.reply("✅ Channel Added")
+    ctx.session.add_channel = false
+    return
   }
 
-  bot.on("message", listener)
+  // UPLOAD MEDIA reply
+  if (ctx.session.upload && ctx.message.reply_to_message) {
+    let file, type
+    if (ctx.message.photo) { file = ctx.message.photo.pop().file_id; type = "photo" }
+    else if (ctx.message.video) { file = ctx.message.video.file_id; type = "video" }
+    else return ctx.reply("❌ Send only photo or video")
+
+    const id = Math.random().toString(36).substring(2, 12)
+    db.media[id] = { file, type }
+    saveDB()
+    ctx.reply(`✅ Link generated:\nhttps://t.me/${bot.botInfo.username}?start=media_${id}`)
+    ctx.session.upload = false
+    return
+  }
+
+  // BROADCAST reply
+  if (ctx.session.broadcast && ctx.message.reply_to_message) {
+    for (let u of db.users) {
+      try { await bot.telegram.copyMessage(u, ctx.chat.id, ctx.message.message_id) } catch {}
+    }
+    ctx.reply("✅ Broadcast Sent")
+    ctx.session.broadcast = false
+    return
+  }
 })
 
 // DELETE CHANNEL
@@ -131,54 +153,21 @@ bot.command("deleteall", ctx => {
   ctx.reply("✅ All channels removed")
 })
 
-// UPLOAD MEDIA
+// UPLOAD COMMAND
 bot.command("upload", async ctx => {
   if (!isAdmin(ctx.from.id)) return
-  const msg = await ctx.reply("Send photo or video", { reply_markup: { force_reply: true } })
-
-  const filter = (ctx2) => ctx2.message?.reply_to_message?.message_id === msg.message_id && ctx2.from.id === ctx.from.id
-
-  const listener = async function handler(ctx2) {
-    if (!filter(ctx2)) return
-    bot.off("message", handler)
-
-    let file, type
-    if (ctx2.message.photo) { file = ctx2.message.photo.pop().file_id; type = "photo" }
-    else if (ctx2.message.video) { file = ctx2.message.video.file_id; type = "video" }
-    else return ctx2.reply("❌ Send only photo or video")
-
-    // Secure random media ID
-    const id = Math.random().toString(36).substring(2, 12)
-    db.media[id] = { file, type }
-    saveDB()
-
-    await ctx2.reply(`✅ Link generated:\nhttps://t.me/${bot.botInfo.username}?start=media_${id}`)
-  }
-
-  bot.on("message", listener)
+  ctx.session.upload = true
+  ctx.reply("Send photo or video", { reply_markup: { force_reply: true } })
 })
 
-// BROADCAST
+// BROADCAST COMMAND
 bot.command("send", async ctx => {
   if (!isAdmin(ctx.from.id)) return
-  const msg = await ctx.reply("Send broadcast message", { reply_markup: { force_reply: true } })
-
-  const filter = (ctx2) => ctx2.message?.reply_to_message?.message_id === msg.message_id && ctx2.from.id === ctx.from.id
-
-  const listener = async function handler(ctx2) {
-    if (!filter(ctx2)) return
-    bot.off("message", handler)
-
-    for (let u of db.users) {
-      try { await bot.telegram.copyMessage(u, ctx2.chat.id, ctx2.message.message_id) } catch {}
-    }
-    await ctx2.reply("✅ Broadcast Sent")
-  }
-
-  bot.on("message", listener)
+  ctx.session.broadcast = true
+  ctx.reply("Send broadcast message", { reply_markup: { force_reply: true } })
 })
 
-// Launch bot with Render webhook mode
+// Launch bot with Render webhook
 if (URL) {
   bot.launch({
     webhook: {
