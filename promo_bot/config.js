@@ -1,4 +1,4 @@
 module.exports = {
-  BOT_TOKEN: "8258227665:AAG8QGCg8S5Snd4ktlL0Gffdk7PaVavGtLQ",
+  BOT_TOKEN: process.env.BOT_TOKEN,
   ADMINS: [6245574035]
 }
