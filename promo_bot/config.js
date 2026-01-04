@@ -1,0 +1,4 @@
+module.exports = {
+  BOT_TOKEN: "8258227665:AAG8QGCg8S5Snd4ktlL0Gffdk7PaVavGtLQ",
+  ADMINS: [6245574035]
+}
