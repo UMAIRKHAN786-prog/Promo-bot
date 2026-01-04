@@ -1,12 +1,12 @@
 const { Telegraf, Markup } = require("telegraf")
 const fs = require("fs-extra")
 const config = require("./config")
-
 const bot = new Telegraf(config.BOT_TOKEN)
-let db = require("./database.json")
+
+let db = fs.existsSync("./db.json") ? fs.readJsonSync("./db.json") : { channels: [], media: {}, users: [] }
 
 function saveDB() {
-  fs.writeJsonSync("./database.json", db, { spaces: 2 })
+  fs.writeJsonSync("./db.json", db, { spaces: 2 })
 }
 
 function isAdmin(id) {
@@ -19,15 +19,15 @@ bot.use((ctx, next) => {
     db.users.push(ctx.from.id)
     saveDB()
   }
-  next()
+  return next()
 })
 
 // Check join
 async function checkJoin(userId) {
   for (let ch of db.channels) {
     try {
-      let res = await bot.telegram.getChatMember(ch, userId)
-      if (["left","kicked"].includes(res.status)) return false
+      const member = await bot.telegram.getChatMember(ch, userId)
+      if (["left", "kicked"].includes(member.status)) return false
     } catch {
       return false
     }
@@ -36,9 +36,7 @@ async function checkJoin(userId) {
 }
 
 function joinButtons() {
-  let buttons = db.channels.map(c =>
-    [Markup.button.url("JOIN", c)]
-  )
+  const buttons = db.channels.map(c => [Markup.button.url("JOIN", c)])
   buttons.push([Markup.button.callback("♻️ Retry", "retry")])
   return Markup.inlineKeyboard(buttons)
 }
@@ -58,10 +56,8 @@ bot.start(async ctx => {
     if (!m) return ctx.reply("File expired")
 
     let msg
-    if (m.type === "photo")
-      msg = await ctx.replyWithPhoto(m.file)
-    else
-      msg = await ctx.replyWithVideo(m.file)
+    if (m.type === "photo") msg = await ctx.replyWithPhoto(m.file)
+    else msg = await ctx.replyWithVideo(m.file)
 
     const warn = await ctx.reply("⚠️ This media will be deleted in 1 hour")
 
@@ -71,7 +67,6 @@ bot.start(async ctx => {
         await ctx.telegram.deleteMessage(ctx.chat.id, warn.message_id)
       } catch {}
     }, 3600000)
-
     return
   }
 
@@ -82,35 +77,40 @@ bot.start(async ctx => {
 bot.action("retry", async ctx => {
   const ok = await checkJoin(ctx.from.id)
   if (ok) {
-    ctx.answerCbQuery("Access Granted")
-    ctx.editMessageText("✅ You can now use the bot")
+    ctx.answerCbQuery("✅ Access Granted")
+    ctx.editMessageText("You can now use the bot")
   } else {
     ctx.answerCbQuery("Join all channels first")
   }
 })
 
 // ADD CHANNEL
-bot.command("add", ctx => {
+bot.command("add", async ctx => {
   if (!isAdmin(ctx.from.id)) return
-  ctx.reply("Send channel link")
-  bot.once("text", ctx2 => {
+  await ctx.reply("Send channel link")
+
+  const handler = async (ctx2) => {
+    if (ctx2.from.id !== ctx.from.id) return
     db.channels.push(ctx2.message.text)
     saveDB()
-    ctx2.reply("Channel Added")
-  })
+    await ctx2.reply("Channel Added")
+    bot.off("text", handler)
+  }
+
+  bot.on("text", handler)
 })
 
 // DELETE CHANNEL
-bot.command("delete", ctx => {
+bot.command("delete", async ctx => {
   if (!isAdmin(ctx.from.id)) return
   const link = ctx.message.text.split(" ")[1]
   db.channels = db.channels.filter(c => c !== link)
   saveDB()
-  ctx.reply("Deleted")
+  ctx.reply("Channel Deleted")
 })
 
-// DELETE ALL
-bot.command("deleteall", ctx => {
+// DELETE ALL CHANNELS
+bot.command("deleteall", async ctx => {
   if (!isAdmin(ctx.from.id)) return
   db.channels = []
   saveDB()
@@ -118,40 +118,53 @@ bot.command("deleteall", ctx => {
 })
 
 // UPLOAD
-bot.command("upload", ctx => {
+bot.command("upload", async ctx => {
   if (!isAdmin(ctx.from.id)) return
-  ctx.reply("Send photo or video")
+  await ctx.reply("Send photo or video")
 
-  bot.once("message", ctx2 => {
+  const handler = async (ctx2) => {
+    if (ctx2.from.id !== ctx.from.id) return
+
     let file, type
     if (ctx2.message.photo) {
       file = ctx2.message.photo.pop().file_id
       type = "photo"
-    }
-    if (ctx2.message.video) {
+    } else if (ctx2.message.video) {
       file = ctx2.message.video.file_id
       type = "video"
+    } else {
+      await ctx2.reply("Send only photo or video")
+      return
     }
 
     const id = Date.now()
     db.media[id] = { file, type }
     saveDB()
+    await ctx2.reply(`Link generated:\nhttps://t.me/${bot.botInfo.username}?start=media_${id}`)
 
-    ctx2.reply(`Link:\nhttps://t.me/${bot.botInfo.username}?start=media_${id}`)
-  })
+    bot.off("message", handler)
+  }
+
+  bot.on("message", handler)
 })
 
 // BROADCAST
-bot.command("send", ctx => {
+bot.command("send", async ctx => {
   if (!isAdmin(ctx.from.id)) return
-  ctx.reply("Send broadcast message")
+  await ctx.reply("Send broadcast message")
 
-  bot.once("message", ctx2 => {
+  const handler = async (ctx2) => {
+    if (ctx2.from.id !== ctx.from.id) return
     for (let u of db.users) {
-      bot.telegram.copyMessage(u, ctx2.chat.id, ctx2.message.message_id).catch(()=>{})
+      try {
+        await bot.telegram.copyMessage(u, ctx2.chat.id, ctx2.message.message_id)
+      } catch {}
     }
-    ctx2.reply("Broadcast Sent")
-  })
+    await ctx2.reply("Broadcast Sent")
+    bot.off("message", handler)
+  }
+
+  bot.on("message", handler)
 })
 
 bot.launch()
