@@ -6,15 +6,21 @@ const PORT = process.env.PORT || 3000
 const URL = process.env.RENDER_EXTERNAL_URL
 
 const bot = new Telegraf(config.BOT_TOKEN)
+
+// -----------------------
+// SESSION MIDDLEWARE
 bot.use(session())
 
-// Load or init DB
+// -----------------------
+// DB
 let db = fs.existsSync("./db.json") ? fs.readJsonSync("./db.json") : { channels: [], media: {}, users: [] }
 function saveDB() { fs.writeJsonSync("./db.json", db, { spaces: 2 }) }
 
-// Admin check
+// -----------------------
+// ADMIN CHECK
 function isAdmin(id) { return config.ADMINS.includes(id) }
 
+// -----------------------
 // Save new users
 bot.use((ctx, next) => {
   if (ctx.from && !db.users.includes(ctx.from.id)) {
@@ -24,6 +30,7 @@ bot.use((ctx, next) => {
   return next()
 })
 
+// -----------------------
 // Check if user joined all channels
 async function checkJoin(userId) {
   for (let ch of db.channels) {
@@ -35,6 +42,7 @@ async function checkJoin(userId) {
   return true
 }
 
+// -----------------------
 // Inline join buttons
 function joinButtons() {
   const buttons = db.channels.map(c => [Markup.button.url("JOIN", c)])
@@ -42,8 +50,11 @@ function joinButtons() {
   return Markup.inlineKeyboard(buttons)
 }
 
+// -----------------------
 // START
 bot.start(async ctx => {
+  ctx.session = ctx.session || {} // FIX undefined session
+
   const payload = ctx.startPayload
 
   if (payload && !payload.startsWith("media_")) {
@@ -79,6 +90,7 @@ bot.start(async ctx => {
   ctx.reply(`Hey ${ctx.from.first_name}\n\nPlease Join All My Update Channels To Use Me!`, joinButtons())
 })
 
+// -----------------------
 // Retry button
 bot.action("retry", async ctx => {
   const ok = await checkJoin(ctx.from.id)
@@ -90,17 +102,40 @@ bot.action("retry", async ctx => {
   }
 })
 
-// ---------------------
+// -----------------------
 // ADD CHANNEL
 bot.command("add", async ctx => {
+  ctx.session = ctx.session || {}
   if (!isAdmin(ctx.from.id)) return
   ctx.session.add_channel = true
   ctx.reply("Send channel link (must start with https://t.me/)", { reply_markup: { force_reply: true } })
 })
 
+// -----------------------
+// UPLOAD MEDIA
+bot.command("upload", async ctx => {
+  ctx.session = ctx.session || {}
+  if (!isAdmin(ctx.from.id)) return
+  ctx.session.upload = true
+  ctx.reply("Send photo or video", { reply_markup: { force_reply: true } })
+})
+
+// -----------------------
+// BROADCAST
+bot.command("send", async ctx => {
+  ctx.session = ctx.session || {}
+  if (!isAdmin(ctx.from.id)) return
+  ctx.session.broadcast = true
+  ctx.reply("Send broadcast message", { reply_markup: { force_reply: true } })
+})
+
+// -----------------------
+// MESSAGE HANDLER
 bot.on("message", async ctx => {
+  ctx.session = ctx.session || {}
+
   // ADD CHANNEL reply
-  if (ctx.session.add_channel && ctx.message.reply_to_message) {
+  if (ctx.session.add_channel && ctx.message.text) {
     const text = ctx.message.text
     if (!text.startsWith("https://t.me/")) return ctx.reply("❌ Please provide a valid Telegram channel link")
     db.channels.push(text)
@@ -111,7 +146,7 @@ bot.on("message", async ctx => {
   }
 
   // UPLOAD MEDIA reply
-  if (ctx.session.upload && ctx.message.reply_to_message) {
+  if (ctx.session.upload) {
     let file, type
     if (ctx.message.photo) { file = ctx.message.photo.pop().file_id; type = "photo" }
     else if (ctx.message.video) { file = ctx.message.video.file_id; type = "video" }
@@ -126,7 +161,7 @@ bot.on("message", async ctx => {
   }
 
   // BROADCAST reply
-  if (ctx.session.broadcast && ctx.message.reply_to_message) {
+  if (ctx.session.broadcast) {
     for (let u of db.users) {
       try { await bot.telegram.copyMessage(u, ctx.chat.id, ctx.message.message_id) } catch {}
     }
@@ -136,6 +171,7 @@ bot.on("message", async ctx => {
   }
 })
 
+// -----------------------
 // DELETE CHANNEL
 bot.command("delete", async ctx => {
   if (!isAdmin(ctx.from.id)) return
@@ -145,7 +181,8 @@ bot.command("delete", async ctx => {
   ctx.reply("✅ Channel Deleted")
 })
 
-// DELETE ALL
+// -----------------------
+// DELETE ALL CHANNELS
 bot.command("deleteall", ctx => {
   if (!isAdmin(ctx.from.id)) return
   db.channels = []
@@ -153,21 +190,8 @@ bot.command("deleteall", ctx => {
   ctx.reply("✅ All channels removed")
 })
 
-// UPLOAD COMMAND
-bot.command("upload", async ctx => {
-  if (!isAdmin(ctx.from.id)) return
-  ctx.session.upload = true
-  ctx.reply("Send photo or video", { reply_markup: { force_reply: true } })
-})
-
-// BROADCAST COMMAND
-bot.command("send", async ctx => {
-  if (!isAdmin(ctx.from.id)) return
-  ctx.session.broadcast = true
-  ctx.reply("Send broadcast message", { reply_markup: { force_reply: true } })
-})
-
-// Launch bot with Render webhook
+// -----------------------
+// Launch bot
 if (URL) {
   bot.launch({
     webhook: {
@@ -179,4 +203,4 @@ if (URL) {
 } else {
   bot.launch()
   console.log("Promo bot running on polling mode")
-}
+            }
