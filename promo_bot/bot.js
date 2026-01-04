@@ -1,6 +1,10 @@
 const { Telegraf, Markup } = require("telegraf")
 const fs = require("fs-extra")
 const config = require("./config")
+
+const PORT = process.env.PORT || 3000
+const URL = process.env.RENDER_EXTERNAL_URL
+
 const bot = new Telegraf(config.BOT_TOKEN)
 
 // Load or init DB
@@ -30,7 +34,7 @@ async function checkJoin(userId) {
   return true
 }
 
-// Generate inline join buttons
+// Inline join buttons
 function joinButtons() {
   const buttons = db.channels.map(c => [Markup.button.url("JOIN", c)])
   buttons.push([Markup.button.callback("♻️ Retry", "retry")])
@@ -91,10 +95,11 @@ bot.command("add", async ctx => {
   if (!isAdmin(ctx.from.id)) return
   const msg = await ctx.reply("Send channel link (must start with https://t.me/)", { reply_markup: { force_reply: true } })
 
-  bot.on("message", async ctx2 => {
-    if (!ctx2.message.reply_to_message) return
-    if (ctx2.message.reply_to_message.message_id !== msg.message_id) return
-    if (ctx2.from.id !== ctx.from.id) return
+  const filter = (ctx2) => ctx2.message?.reply_to_message?.message_id === msg.message_id && ctx2.from.id === ctx.from.id
+
+  const listener = async function handler(ctx2) {
+    if (!filter(ctx2)) return
+    bot.off("message", handler)  // remove listener after first reply
 
     const text = ctx2.message.text.trim()
     if (!text.startsWith("https://t.me/")) {
@@ -104,7 +109,9 @@ bot.command("add", async ctx => {
     db.channels.push(text)
     saveDB()
     await ctx2.reply("✅ Channel Added")
-  })
+  }
+
+  bot.on("message", listener)
 })
 
 // DELETE CHANNEL
@@ -129,10 +136,11 @@ bot.command("upload", async ctx => {
   if (!isAdmin(ctx.from.id)) return
   const msg = await ctx.reply("Send photo or video", { reply_markup: { force_reply: true } })
 
-  bot.on("message", async ctx2 => {
-    if (!ctx2.message.reply_to_message) return
-    if (ctx2.message.reply_to_message.message_id !== msg.message_id) return
-    if (ctx2.from.id !== ctx.from.id) return
+  const filter = (ctx2) => ctx2.message?.reply_to_message?.message_id === msg.message_id && ctx2.from.id === ctx.from.id
+
+  const listener = async function handler(ctx2) {
+    if (!filter(ctx2)) return
+    bot.off("message", handler)
 
     let file, type
     if (ctx2.message.photo) { file = ctx2.message.photo.pop().file_id; type = "photo" }
@@ -140,12 +148,14 @@ bot.command("upload", async ctx => {
     else return ctx2.reply("❌ Send only photo or video")
 
     // Secure random media ID
-    const id = Math.random().toString(36).substring(2, 12) // 10 chars
+    const id = Math.random().toString(36).substring(2, 12)
     db.media[id] = { file, type }
     saveDB()
 
     await ctx2.reply(`✅ Link generated:\nhttps://t.me/${bot.botInfo.username}?start=media_${id}`)
-  })
+  }
+
+  bot.on("message", listener)
 })
 
 // BROADCAST
@@ -153,18 +163,31 @@ bot.command("send", async ctx => {
   if (!isAdmin(ctx.from.id)) return
   const msg = await ctx.reply("Send broadcast message", { reply_markup: { force_reply: true } })
 
-  bot.on("message", async ctx2 => {
-    if (!ctx2.message.reply_to_message) return
-    if (ctx2.message.reply_to_message.message_id !== msg.message_id) return
-    if (ctx2.from.id !== ctx.from.id) return
+  const filter = (ctx2) => ctx2.message?.reply_to_message?.message_id === msg.message_id && ctx2.from.id === ctx.from.id
+
+  const listener = async function handler(ctx2) {
+    if (!filter(ctx2)) return
+    bot.off("message", handler)
 
     for (let u of db.users) {
       try { await bot.telegram.copyMessage(u, ctx2.chat.id, ctx2.message.message_id) } catch {}
     }
     await ctx2.reply("✅ Broadcast Sent")
-  })
+  }
+
+  bot.on("message", listener)
 })
 
-// Launch bot
-bot.launch()
-console.log("Promo bot running")
+// Launch bot with Render webhook mode
+if (URL) {
+  bot.launch({
+    webhook: {
+      domain: URL,
+      port: PORT
+    }
+  })
+  console.log(`Promo bot running on webhook mode at port ${PORT}`)
+} else {
+  bot.launch()
+  console.log("Promo bot running on polling mode")
+}
