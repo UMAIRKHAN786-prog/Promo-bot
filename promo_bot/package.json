@@ -1,7 +1,7 @@
 {
   "name": "promo-bot",
   "version": "1.0.0",
-  "description": "Telegram promo bot with URL fetch, warnings, and delete after 1 hour",
+  "description": "Telegram promo bot with URL fetch, animations, and auto delete",
   "type": "module",
   "main": "bot.js",
   "scripts": {
@@ -11,7 +11,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "telegraf": "^4.17.3",
+    "telegraf": "^4.16.3",
     "axios": "^1.6.5",
     "dotenv": "^16.3.1",
     "fs-extra": "^11.1.1"
