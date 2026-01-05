@@ -1,91 +1,71 @@
-import { Telegraf, Markup, session } from "telegraf";
+import { Telegraf, Markup } from "telegraf";
 import axios from "axios";
-import fs from "fs";
+import fs from "fs-extra";
 import path from "path";
+import dotenv from "dotenv";
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const bot = new Telegraf(BOT_TOKEN);
-bot.use(session());
+dotenv.config();
 
-const TEMP_DIR = "./temp";
-if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR);
+const bot = new Telegraf(process.env.BOT_TOKEN);
 
-bot.start((ctx) => {
-  ctx.replyWithMarkdown(
-    "New - ⚠️ Important:\n\nAll Messages will be deleted after 1 hours. Please save or forward these messages to your personal saved messages to avoid losing them!\n\n📢 Uᴘᴅᴀᴛᴇ Cʜᴀɴɴᴇʟ",
+const tempDir = "./tmp";
+await fs.ensureDir(tempDir);
+
+const WAIT_DOTS = [".", "..", "..."];
+const DELETE_AFTER_MS = 60 * 60 * 1000; // 1 hour
+
+bot.start(async (ctx) => {
+  await ctx.replyWithMarkdown(
+    "New - ⚠️ Important:\n\nAll Messages will be deleted after 1 hours. Please save or forward these messages to your personal saved messages to avoid losing them!\n",
     Markup.inlineKeyboard([
-      Markup.button.url("📢 Uᴘᴅᴀᴛᴇ Cʜᴀɴɴᴇʟ", "https://t.me/+Dy-sla1PBGBmYTZl"),
+      Markup.button.url("📢 Uᴘᴅᴀᴛᴇ Cʜᴀɴɴᴇʟ", "https://t.me/+Dy-sla1PBGBmYTZl")
     ])
   );
 });
 
 bot.command("upload", async (ctx) => {
-  if (ctx.message.photo || ctx.message.video) {
-    const fileId =
-      ctx.message.photo?.[ctx.message.photo.length - 1].file_id ||
-      ctx.message.video.file_id;
-    const file = await ctx.telegram.getFile(fileId);
-    const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
-    const ext = path.extname(file.file_path) || ".dat";
-    const filename = path.join(TEMP_DIR, `${fileId}${ext}`);
-    const response = await axios.get(fileUrl, { responseType: "arraybuffer" });
-    fs.writeFileSync(filename, response.data);
-    await ctx.reply("✅ Uploaded and saved temporarily.");
+  const text = ctx.message.text.split(" ")[1];
+  if (!text) return ctx.reply("Please provide a URL.");
 
-    setTimeout(() => {
-      if (fs.existsSync(filename)) fs.unlinkSync(filename);
-    }, 3600 * 1000);
-  }
-});
+  const waitMsg = await ctx.reply("Pʟᴇᴀsᴇ ᴡᴀɪᴛ...\n.");
 
-bot.command("fetch", async (ctx) => {
-  if (!ctx.session.fetching) {
-    ctx.session.fetching = true;
-    let dots = ".";
-    const msg = await ctx.reply(
-      "Pʟᴇᴀsᴇ ᴡᴀɪᴛ...\n📢 Uᴘᴅᴀᴛᴇ Cʜᴀɴɴᴇʟ"
-    );
+  try {
+    for (let i = 0; i < 5; i++) {
+      await new Promise(r => setTimeout(r, 300)); // 1.5s animation
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        waitMsg.message_id,
+        undefined,
+        `Pʟᴇᴀsᴇ ᴡᴀɪᴛ...\n${WAIT_DOTS[i % 3]}`
+      );
+    }
 
-    const interval = setInterval(async () => {
-      dots = dots.length < 3 ? dots + "." : ".";
-      try {
-        await ctx.telegram.editMessageText(
-          msg.chat.id,
-          msg.message_id,
-          undefined,
-          `Pʟᴇᴀsᴇ ᴡᴀɪᴛ...\n📢 Uᴘᴅᴀᴛᴇ Cʜᴀɴɴᴇʟ${dots}`
-        );
-      } catch {}
-    }, 500);
+    const resp = await axios.get(text, { responseType: "arraybuffer" });
+    const ext = text.split(".").pop().split("?")[0];
+    const filename = path.join(tempDir, `file_${Date.now()}.${ext}`);
+    await fs.writeFile(filename, resp.data);
+
+    const options = ext.match(/(mp4|mov|webm)/i) ? { video: filename } : { photo: filename };
+    await ctx.replyWithDocument({ source: filename });
 
     setTimeout(async () => {
-      clearInterval(interval);
-      await ctx.telegram.editMessageText(
-        msg.chat.id,
-        msg.message_id,
-        undefined,
-        "✅ Ready to send video/photo"
-      );
-      ctx.session.fetching = false;
-    }, 90 * 1000);
+      await fs.remove(filename);
+    }, 60 * 1000); // delete temp file after 1 min
+  } catch (e) {
+    await ctx.reply("Error fetching URL.");
   }
 });
 
-bot.on("text", async (ctx) => {
-  if (ctx.message.text.startsWith("http")) {
-    const url = ctx.message.text;
-    try {
-      const resp = await axios.get(url, { responseType: "arraybuffer" });
-      const filename = path.join(TEMP_DIR, `download_${Date.now()}`);
-      fs.writeFileSync(filename, resp.data);
-      await ctx.replyWithDocument({ source: filename });
-      setTimeout(() => {
-        if (fs.existsSync(filename)) fs.unlinkSync(filename);
-      }, 3600 * 1000);
-    } catch {
-      await ctx.reply("❌ Failed to fetch file from URL.");
-    }
-  }
+bot.command("add", async (ctx) => {
+  const text = ctx.message.text.split(" ")[1];
+  if (!text) return ctx.reply("Please provide item to add.");
+  const dbFile = "./db.json";
+  let db = [];
+  if (await fs.pathExists(dbFile)) db = await fs.readJson(dbFile);
+  db.push({ item: text, added_at: Date.now() });
+  await fs.writeJson(dbFile, db);
+  ctx.reply(`Added: ${text}`);
 });
 
 bot.launch();
+console.log("Promo bot running");
