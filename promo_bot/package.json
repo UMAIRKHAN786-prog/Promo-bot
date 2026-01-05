@@ -1,5 +1,17 @@
-"dependencies": {
-  "telegraf": "^4.13.2",
-  "fs-extra": "^11.1.1",
-  "axios": "^1.5.0"
+{
+  "name": "promo-bot",
+  "version": "1.0.0",
+  "description": "Telegram promo bot",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "telegraf": "^4.13.2",
+    "fs-extra": "^11.1.1",
+    "axios": "^1.5.0"
+  }
 }
